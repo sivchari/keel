@@ -177,20 +177,9 @@ func TestController_ReconcileRequeue(t *testing.T) {
 func TestController_ReconcileRequeueAfter(t *testing.T) {
 	t.Parallel()
 
-	var count atomic.Int32
-
-	var mu sync.Mutex
-
-	var times []time.Time
-
+	tracker := newTimeTracker()
 	reconciler := core.ReconcilerFunc(func(_ context.Context, _ core.Request) (core.Result, error) {
-		mu.Lock()
-		times = append(times, time.Now())
-		mu.Unlock()
-
-		count.Add(1)
-
-		if count.Load() == 1 {
+		if tracker.record() == 1 {
 			return core.Result{RequeueAfter: 50 * time.Millisecond}, nil
 		}
 
@@ -198,46 +187,63 @@ func TestController_ReconcileRequeueAfter(t *testing.T) {
 	})
 
 	ctrl := controller.New("test-controller", reconciler, controller.Options{})
-
 	source := newMockSource()
 	ctrl.Watch(source)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	done := make(chan error, 1)
-
-	go func() {
-		done <- ctrl.Start(ctx)
-	}()
+	go func() { _ = ctrl.Start(ctx) }()
 
 	source.WaitStarted()
-
-	key := newTestKey("test-1")
-	source.SendEvent(key)
-
-	// Wait for delayed reconciliation.
+	source.SendEvent(newTestKey("test-1"))
 	time.Sleep(200 * time.Millisecond)
 
-	if got := count.Load(); got < 2 {
-		t.Errorf("reconcile count = %d, want >= 2 (should have requeued after delay)", got)
+	if got := tracker.count(); got < 2 {
+		t.Errorf("reconcile count = %d, want >= 2", got)
 	}
 
-	mu.Lock()
-
-	if len(times) >= 2 {
-		delay := times[1].Sub(times[0])
-
-		if delay < 50*time.Millisecond {
-			t.Errorf("delay between reconciliations = %v, want >= 50ms", delay)
-		}
+	if delay := tracker.delayBetween(0, 1); delay < 50*time.Millisecond {
+		t.Errorf("delay = %v, want >= 50ms", delay)
 	}
-
-	mu.Unlock()
 
 	cancel()
+}
 
-	<-done
+type timeTracker struct {
+	mu    sync.Mutex
+	times []time.Time
+}
+
+func newTimeTracker() *timeTracker {
+	return &timeTracker{}
+}
+
+func (t *timeTracker) record() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.times = append(t.times, time.Now())
+
+	return len(t.times)
+}
+
+func (t *timeTracker) count() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return len(t.times)
+}
+
+func (t *timeTracker) delayBetween(i, j int) time.Duration {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if j >= len(t.times) || i >= len(t.times) {
+		return 0
+	}
+
+	return t.times[j].Sub(t.times[i])
 }
 
 func TestController_ConcurrentReconcile(t *testing.T) {
@@ -325,7 +331,6 @@ func TestController_StartTwice(t *testing.T) {
 
 	// Try to start again.
 	err := ctrl.Start(ctx)
-
 	if err == nil {
 		t.Error("expected error when starting controller twice")
 	}

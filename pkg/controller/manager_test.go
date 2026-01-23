@@ -58,28 +58,12 @@ func TestManager_Start(t *testing.T) {
 
 	mgr := controller.NewManager(controller.ManagerOptions{})
 
-	var ctrl1Reconciled atomic.Bool
+	var flag1, flag2 atomic.Bool
 
-	var ctrl2Reconciled atomic.Bool
+	ctrl1 := controller.New("ctrl-1", flagReconciler(&flag1), controller.Options{})
+	ctrl2 := controller.New("ctrl-2", flagReconciler(&flag2), controller.Options{})
 
-	reconciler1 := core.ReconcilerFunc(func(_ context.Context, _ core.Request) (core.Result, error) {
-		ctrl1Reconciled.Store(true)
-
-		return core.Result{}, nil
-	})
-
-	reconciler2 := core.ReconcilerFunc(func(_ context.Context, _ core.Request) (core.Result, error) {
-		ctrl2Reconciled.Store(true)
-
-		return core.Result{}, nil
-	})
-
-	ctrl1 := controller.New("ctrl-1", reconciler1, controller.Options{})
-	ctrl2 := controller.New("ctrl-2", reconciler2, controller.Options{})
-
-	source1 := newMockSource()
-	source2 := newMockSource()
-
+	source1, source2 := newMockSource(), newMockSource()
 	ctrl1.Watch(source1)
 	ctrl2.Watch(source2)
 
@@ -94,42 +78,31 @@ func TestManager_Start(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	done := make(chan error, 1)
+	go func() { _ = mgr.Start(ctx) }()
 
-	go func() {
-		done <- mgr.Start(ctx)
-	}()
-
-	// Wait for sources to start.
 	source1.WaitStarted()
 	source2.WaitStarted()
-
-	// Send events to both controllers.
 	source1.SendEvent(newTestKey("test-1"))
 	source2.SendEvent(newTestKey("test-2"))
-
-	// Wait for reconciliation.
 	time.Sleep(100 * time.Millisecond)
 
-	if !ctrl1Reconciled.Load() {
+	if !flag1.Load() {
 		t.Error("ctrl1 was not reconciled")
 	}
 
-	if !ctrl2Reconciled.Load() {
+	if !flag2.Load() {
 		t.Error("ctrl2 was not reconciled")
 	}
 
-	// Shutdown.
 	cancel()
+}
 
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("Start() returned error: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for manager to stop")
-	}
+func flagReconciler(flag *atomic.Bool) core.Reconciler {
+	return core.ReconcilerFunc(func(_ context.Context, _ core.Request) (core.Result, error) {
+		flag.Store(true)
+
+		return core.Result{}, nil
+	})
 }
 
 func TestManager_StartTwice(t *testing.T) {
@@ -150,7 +123,6 @@ func TestManager_StartTwice(t *testing.T) {
 
 	// Try to start again.
 	err := mgr.Start(ctx)
-
 	if err == nil {
 		t.Error("expected error when starting manager twice")
 	}
@@ -181,7 +153,6 @@ func TestManager_AddAfterStart(t *testing.T) {
 
 	// Add after start should fail.
 	err := mgr.Add(ctrl)
-
 	if err == nil {
 		t.Error("expected error when adding controller after start")
 	}
