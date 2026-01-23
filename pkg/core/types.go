@@ -27,6 +27,7 @@ func (k ResourceKey) String() string {
 	if k.Namespace == "" {
 		return fmt.Sprintf("%s/%s/%s", k.APIVersion, k.Kind, k.Name)
 	}
+
 	return fmt.Sprintf("%s/%s/%s/%s", k.APIVersion, k.Kind, k.Namespace, k.Name)
 }
 
@@ -87,10 +88,12 @@ func (r *Resource) DeepCopy() *Resource {
 	if r.Spec != nil {
 		cp.Spec = deepCopyMap(r.Spec)
 	}
+
 	if r.Labels != nil {
 		cp.Labels = make(map[string]string, len(r.Labels))
 		maps.Copy(cp.Labels, r.Labels)
 	}
+
 	if r.Annotations != nil {
 		cp.Annotations = make(map[string]string, len(r.Annotations))
 		maps.Copy(cp.Annotations, r.Annotations)
@@ -109,6 +112,7 @@ func deepCopyMap(m map[string]any) map[string]any {
 	for k, v := range m {
 		cp[k] = deepCopyValue(v)
 	}
+
 	return cp
 }
 
@@ -122,6 +126,7 @@ func deepCopyValue(v any) any {
 		for i, item := range val {
 			cp[i] = deepCopyValue(item)
 		}
+
 		return cp
 	default:
 		return v

@@ -1,0 +1,74 @@
+version: 2
+
+project_name: keel
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: keel
+    main: ./cmd/keel
+    binary: keel
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+  - id: keel-provider-aws
+    main: ./cmd/keel-provider-aws
+    binary: keel-provider-aws
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: keel
+    formats: ['tar.gz']
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: ['zip']
+    files:
+      - LICENSE
+      - README.md
+    builds:
+      - keel
+      - keel-provider-aws
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+
+changelog:
+  sort: asc
+
+release:
+  use_existing_draft: true
+
+homebrew_casks:
+  - name: keel
+    repository:
+      owner: sivchari
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/sivchari/keel
+    description: "A Kubernetes-independent reconciliation engine for cloud resources"
+    license: MIT
+    binaries:
+      - keel
+      - keel-provider-aws
