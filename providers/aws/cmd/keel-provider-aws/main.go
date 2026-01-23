@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	providerv1 "github.com/sivchari/keel/gen/keel/provider/v1"
+	"github.com/sivchari/keel/pkg/registration"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
@@ -29,9 +31,11 @@ func main() {
 
 func run() error {
 	var (
-		addr     = flag.String("addr", ":50051", "server address")
-		region   = flag.String("region", "", "AWS region (defaults to AWS_REGION env var)")
-		endpoint = flag.String("endpoint", "", "custom AWS endpoint URL (for LocalStack)")
+		addr         = flag.String("addr", ":50051", "server address")
+		region       = flag.String("region", "", "AWS region (defaults to AWS_REGION env var)")
+		endpoint     = flag.String("endpoint", "", "custom AWS endpoint URL (for LocalStack)")
+		keelAddr     = flag.String("keel-addr", "", "keel registration server address (e.g., localhost:50050)")
+		providerName = flag.String("provider-name", "aws-provider", "unique provider instance name")
 	)
 
 	flag.Parse()
@@ -61,17 +65,59 @@ func run() error {
 	providerv1.RegisterProviderServiceServer(server, providerService)
 	reflection.Register(server)
 
+	// Start gRPC server in background
+	serverErr := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		logger.Info("shutting down server")
-		server.GracefulStop()
+		logger.Info("starting AWS provider server", "addr", *addr, "region", cfg.Region, "endpoint", *endpoint)
+		serverErr <- server.Serve(listener)
 	}()
 
-	logger.Info("starting AWS provider server", "addr", *addr, "region", cfg.Region, "endpoint", *endpoint)
+	// Register with keel if address is provided
+	var regClient *registration.Client
+	if *keelAddr != "" {
+		regClient, err = registration.NewClient(ctx, registration.ClientOptions{
+			KeelAddr:         *keelAddr,
+			ProviderName:     *providerName,
+			ProviderEndpoint: *addr,
+			Logger:           logger,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create registration client: %w", err)
+		}
 
-	if err := server.Serve(listener); err != nil {
+		info, err := providerService.GetInfo(ctx, &providerv1.GetInfoRequest{})
+		if err != nil {
+			return fmt.Errorf("failed to get provider info: %w", err)
+		}
+
+		if err := regClient.Register(ctx, info.GetVersion(), info.GetSupportedKinds(), info.GetSupportsWatch()); err != nil {
+			return fmt.Errorf("failed to register with keel: %w", err)
+		}
+	}
+
+	// Wait for shutdown signal or server error
+	select {
+	case <-ctx.Done():
+		logger.Info("shutting down server")
+	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
 	}
+
+	// Deregister from keel
+	if regClient != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+
+		if err := regClient.Deregister(shutdownCtx); err != nil {
+			logger.Warn("failed to deregister from keel", "error", err)
+		}
+
+		if err := regClient.Close(); err != nil {
+			logger.Warn("failed to close registration client", "error", err)
+		}
+	}
+
+	server.GracefulStop()
 
 	return nil
 }

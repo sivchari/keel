@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package keel.registration.v1;
+
+import "keel/provider/v1/provider.proto";
+
+option go_package = "github.com/sivchari/keel/gen/keel/registration/v1;registrationv1";
+
+// RegistrationService allows providers to register themselves with keel core.
+// This follows the Kubernetes Device Plugin pattern.
+service RegistrationService {
+  // Register registers a provider with keel core.
+  // The provider calls this on startup to announce its presence.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Deregister removes a provider from keel core.
+  // The provider should call this on graceful shutdown.
+  rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
+
+  // Heartbeat keeps the registration alive.
+  // Providers should call this periodically to indicate they are healthy.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// RegisterRequest contains provider registration information.
+message RegisterRequest {
+  // name is the unique identifier for this provider instance.
+  string name = 1;
+
+  // endpoint is the gRPC endpoint where the provider is listening.
+  // Example: "localhost:50051" or "unix:///var/run/keel/aws.sock"
+  string endpoint = 2;
+
+  // supported_kinds lists all resource kinds this provider can manage.
+  repeated keel.provider.v1.KindInfo supported_kinds = 3;
+
+  // version is the provider version.
+  string version = 4;
+
+  // supports_watch indicates if the provider supports WatchEvents.
+  bool supports_watch = 5;
+}
+
+// RegisterResponse is returned after successful registration.
+message RegisterResponse {
+  // registered indicates if registration was successful.
+  bool registered = 1;
+
+  // message contains additional information or error details.
+  string message = 2;
+
+  // heartbeat_interval_seconds is the recommended interval for heartbeats.
+  // If 0, heartbeats are not required.
+  int32 heartbeat_interval_seconds = 3;
+}
+
+// DeregisterRequest identifies the provider to deregister.
+message DeregisterRequest {
+  // name is the unique identifier for the provider instance.
+  string name = 1;
+}
+
+// DeregisterResponse is returned after deregistration.
+message DeregisterResponse {
+  // deregistered indicates if deregistration was successful.
+  bool deregistered = 1;
+
+  // message contains additional information.
+  string message = 2;
+}
+
+// HeartbeatRequest contains the provider's health status.
+message HeartbeatRequest {
+  // name is the unique identifier for the provider instance.
+  string name = 1;
+
+  // healthy indicates if the provider is healthy.
+  bool healthy = 2;
+}
+
+// HeartbeatResponse acknowledges the heartbeat.
+message HeartbeatResponse {
+  // acknowledged indicates if the heartbeat was received.
+  bool acknowledged = 1;
+}
