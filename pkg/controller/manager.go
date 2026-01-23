@@ -92,7 +92,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	close(errCh)
 
 	// Collect errors.
-	var errs []error
+	errs := make([]error, 0, len(m.controllers))
 
 	for err := range errCh {
 		errs = append(errs, err)

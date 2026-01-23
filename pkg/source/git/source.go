@@ -31,6 +31,14 @@ type Source struct {
 	cache    map[string]*core.Resource
 }
 
+// Get returns the resource with the given key, or nil if not found.
+func (s *Source) Get(key core.ResourceKey) *core.Resource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.cache[key.String()]
+}
+
 // New creates a new Git source with the given options.
 func New(opts Options) (*Source, error) {
 	if err := opts.validate(); err != nil {
