@@ -1,0 +1,302 @@
+syntax = "proto3";
+
+package keel.provider.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/sivchari/keel/gen/keel/provider/v1;providerv1";
+
+// ProviderService defines the gRPC interface between keel core and providers.
+// Providers implement this service to manage cloud resources.
+service ProviderService {
+  // GetInfo returns provider metadata and supported resource kinds.
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse);
+
+  // Get retrieves the actual state of a resource from the cloud.
+  //
+  // Returns:
+  //   - NOT_FOUND: if the resource does not exist in the cloud
+  //   - INVALID_ARGUMENT: if the key is malformed
+  //   - INTERNAL: for provider-side errors
+  rpc Get(GetRequest) returns (GetResponse);
+
+  // List retrieves all resources of a given kind with pagination.
+  //
+  // Returns:
+  //   - INVALID_ARGUMENT: if the request parameters are invalid
+  //   - INTERNAL: for provider-side errors
+  rpc List(ListRequest) returns (ListResponse);
+
+  // Create creates a new resource in the cloud.
+  //
+  // Returns:
+  //   - ALREADY_EXISTS: if the resource already exists
+  //   - INVALID_ARGUMENT: if the resource definition is invalid
+  //   - INTERNAL: for provider-side errors
+  rpc Create(CreateRequest) returns (CreateResponse);
+
+  // Update updates an existing resource in the cloud.
+  //
+  // Returns:
+  //   - NOT_FOUND: if the resource does not exist
+  //   - INVALID_ARGUMENT: if the resource definition is invalid
+  //   - ABORTED: if the actual_state has changed (optimistic locking)
+  //   - INTERNAL: for provider-side errors
+  rpc Update(UpdateRequest) returns (UpdateResponse);
+
+  // Delete removes a resource from the cloud.
+  //
+  // Returns:
+  //   - NOT_FOUND: if the resource does not exist
+  //   - INTERNAL: for provider-side errors
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Validate checks if a resource definition is valid.
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+
+  // WatchEvents streams resource change events from the cloud.
+  // This enables event-driven reconciliation instead of polling.
+  rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
+}
+
+// GetInfoRequest is empty as no parameters are needed.
+message GetInfoRequest {}
+
+// GetInfoResponse contains provider metadata.
+message GetInfoResponse {
+  // name is the provider identifier (e.g., "aws", "gcp", "azure").
+  string name = 1;
+
+  // version is the provider version.
+  string version = 2;
+
+  // supported_kinds lists all resource kinds this provider can manage.
+  repeated KindInfo supported_kinds = 3;
+
+  // supports_watch indicates if WatchEvents is implemented.
+  bool supports_watch = 4;
+}
+
+// KindInfo describes a supported resource kind.
+message KindInfo {
+  // api_group is the API group (e.g., "aws.keel.dev").
+  string api_group = 1;
+
+  // kind is the resource kind (e.g., "S3Bucket").
+  string kind = 2;
+
+  // versions lists supported API versions (e.g., ["v1alpha1", "v1"]).
+  repeated string versions = 3;
+}
+
+// ResourceKey uniquely identifies a resource.
+message ResourceKey {
+  // api_version is the full API version (e.g., "aws.keel.dev/v1alpha1").
+  string api_version = 1;
+
+  // kind is the resource kind (e.g., "S3Bucket").
+  string kind = 2;
+
+  // namespace is the logical namespace (optional).
+  optional string namespace = 3;
+
+  // name is the resource name.
+  string name = 4;
+}
+
+// Resource represents a resource definition with its desired state.
+message Resource {
+  // key uniquely identifies this resource.
+  ResourceKey key = 1;
+
+  // spec is the desired state of the resource.
+  google.protobuf.Struct spec = 2;
+
+  // labels are key-value pairs for organization.
+  map<string, string> labels = 3;
+
+  // annotations are key-value pairs for additional metadata.
+  map<string, string> annotations = 4;
+}
+
+// GetRequest requests the actual state of a resource.
+message GetRequest {
+  // key uniquely identifies the resource to retrieve.
+  ResourceKey key = 1;
+}
+
+// GetResponse contains the actual state of a resource.
+message GetResponse {
+  // exists indicates if the resource exists in the cloud.
+  bool exists = 1;
+
+  // actual_state is the current state of the resource.
+  google.protobuf.Struct actual_state = 2;
+
+  // metadata contains provider-specific metadata (e.g., ARN, resource ID).
+  map<string, string> metadata = 3;
+}
+
+// ListRequest requests all resources of a given kind with pagination.
+message ListRequest {
+  // api_version filters by API version.
+  string api_version = 1;
+
+  // kind filters by resource kind.
+  string kind = 2;
+
+  // namespace filters by namespace (optional).
+  optional string namespace = 3;
+
+  // labels filters by labels (optional).
+  map<string, string> labels = 4;
+
+  // page_size is the maximum number of items to return. Default is 100.
+  int32 page_size = 5;
+
+  // page_token is the token for pagination, obtained from previous ListResponse.
+  string page_token = 6;
+}
+
+// ListResponse contains all matching resources with pagination.
+message ListResponse {
+  // items is the list of resources matching the request.
+  repeated ListItem items = 1;
+
+  // next_page_token is the token for the next page. Empty if no more pages.
+  string next_page_token = 2;
+
+  // total_size is the total count of items (optional, may be expensive to compute).
+  int32 total_size = 3;
+}
+
+// ListItem represents a single resource in a list response.
+message ListItem {
+  // key uniquely identifies this resource.
+  ResourceKey key = 1;
+
+  // actual_state is the current state of the resource.
+  google.protobuf.Struct actual_state = 2;
+
+  // metadata contains provider-specific metadata.
+  map<string, string> metadata = 3;
+}
+
+// CreateRequest requests creation of a new resource.
+message CreateRequest {
+  // resource contains the resource definition to create.
+  Resource resource = 1;
+
+  // request_id is a unique identifier for this request.
+  // If provided, the server will ensure idempotency.
+  string request_id = 2;
+}
+
+// CreateResponse contains metadata of the created resource.
+message CreateResponse {
+  // metadata contains provider-specific metadata of the created resource.
+  map<string, string> metadata = 1;
+}
+
+// UpdateRequest requests an update to an existing resource.
+message UpdateRequest {
+  // resource contains the desired state.
+  Resource resource = 1;
+
+  // actual_state is the current state (for optimistic locking).
+  google.protobuf.Struct actual_state = 2;
+}
+
+// UpdateResponse is empty on success.
+message UpdateResponse {}
+
+// DeleteRequest requests deletion of a resource.
+message DeleteRequest {
+  // key uniquely identifies the resource to delete.
+  ResourceKey key = 1;
+}
+
+// DeleteResponse is empty on success.
+message DeleteResponse {}
+
+// ValidateRequest requests validation of a resource definition.
+message ValidateRequest {
+  // resource is the resource definition to validate.
+  Resource resource = 1;
+}
+
+// ValidateResponse contains validation results.
+message ValidateResponse {
+  // valid indicates if the resource definition is valid.
+  bool valid = 1;
+
+  // errors contains validation errors if any.
+  repeated ValidationError errors = 2;
+}
+
+// ValidationError describes a single validation error.
+message ValidationError {
+  // code is a machine-readable error code.
+  string code = 1;
+
+  // field is the path to the invalid field.
+  string field = 2;
+
+  // message describes the error in human-readable form.
+  string message = 3;
+}
+
+// WatchEventsRequest configures which events to watch.
+message WatchEventsRequest {
+  // kinds filters which resource kinds to watch.
+  repeated KindFilter kinds = 1;
+}
+
+// KindFilter specifies a resource kind to watch.
+message KindFilter {
+  // api_version is the API version to filter by.
+  string api_version = 1;
+
+  // kind is the resource kind to filter by.
+  string kind = 2;
+}
+
+// WatchEventsResponse wraps a single resource event.
+message WatchEventsResponse {
+  // event is the resource change event.
+  ResourceEvent event = 1;
+}
+
+// ResourceEvent represents a change event from the cloud.
+message ResourceEvent {
+  // type indicates what kind of change occurred.
+  EventType type = 1;
+
+  // key identifies the affected resource.
+  ResourceKey key = 2;
+
+  // actual_state is the current state after the change.
+  google.protobuf.Struct actual_state = 3;
+
+  // timestamp is when the event occurred.
+  google.protobuf.Timestamp timestamp = 4;
+
+  // reason describes why the change occurred (if known).
+  string reason = 5;
+}
+
+// EventType categorizes resource events.
+enum EventType {
+  // EVENT_TYPE_UNSPECIFIED is the default value.
+  EVENT_TYPE_UNSPECIFIED = 0;
+
+  // EVENT_TYPE_CREATED indicates a resource was created.
+  EVENT_TYPE_CREATED = 1;
+
+  // EVENT_TYPE_UPDATED indicates a resource was updated.
+  EVENT_TYPE_UPDATED = 2;
+
+  // EVENT_TYPE_DELETED indicates a resource was deleted.
+  EVENT_TYPE_DELETED = 3;
+}
