@@ -118,7 +118,7 @@ func (c *Controller) Start(ctx context.Context) error {
 	c.queue.ShutDown()
 	wg.Wait()
 
-	return c.collectErrors(errCh)
+	return c.collectErrors(errCh, len(c.sources))
 }
 
 func (c *Controller) markStarted() error {
@@ -161,10 +161,11 @@ func (c *Controller) startWorkers(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-func (c *Controller) collectErrors(errCh chan error) error {
+func (c *Controller) collectErrors(errCh chan error, capacity int) error {
 	close(errCh)
 
-	var errs []error
+	errs := make([]error, 0, capacity)
+
 	for err := range errCh {
 		errs = append(errs, err)
 	}

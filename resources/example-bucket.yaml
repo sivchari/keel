@@ -1,0 +1,10 @@
+apiVersion: aws.keel.dev/v1alpha1
+kind: S3Bucket
+metadata:
+  name: example-bucket
+spec:
+  versioning:
+    enabled: true
+  tags:
+    Environment: development
+    ManagedBy: keel
