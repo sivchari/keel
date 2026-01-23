@@ -20,9 +20,18 @@ type Handler struct {
 }
 
 // NewHandler creates a new S3 handler.
-func NewHandler(cfg *aws.Config) *Handler {
+func NewHandler(cfg *aws.Config, endpoint string) *Handler {
+	var opts []func(*s3.Options)
+
+	if endpoint != "" {
+		opts = append(opts, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+			o.UsePathStyle = true // Required for LocalStack
+		})
+	}
+
 	return &Handler{
-		client: s3.NewFromConfig(*cfg),
+		client: s3.NewFromConfig(*cfg, opts...),
 		region: cfg.Region,
 	}
 }
@@ -61,7 +70,11 @@ func (h *Handler) Get(ctx context.Context, key *providerv1.ResourceKey) (*provid
 // Create creates a new S3 bucket.
 func (h *Handler) Create(ctx context.Context, resource *providerv1.Resource) (*providerv1.CreateResponse, error) {
 	bucketName := resource.GetKey().GetName()
-	spec := resource.GetSpec().AsMap()
+
+	spec, err := ParseSpec(resource.GetSpec().AsMap())
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse spec: %w", err)
+	}
 
 	input := &s3.CreateBucketInput{
 		Bucket: aws.String(bucketName),
@@ -73,7 +86,7 @@ func (h *Handler) Create(ctx context.Context, resource *providerv1.Resource) (*p
 		}
 	}
 
-	_, err := h.client.CreateBucket(ctx, input)
+	_, err = h.client.CreateBucket(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bucket: %w", err)
 	}
@@ -93,7 +106,11 @@ func (h *Handler) Create(ctx context.Context, resource *providerv1.Resource) (*p
 // Update updates an existing S3 bucket.
 func (h *Handler) Update(ctx context.Context, resource *providerv1.Resource) (*providerv1.UpdateResponse, error) {
 	bucketName := resource.GetKey().GetName()
-	spec := resource.GetSpec().AsMap()
+
+	spec, err := ParseSpec(resource.GetSpec().AsMap())
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse spec: %w", err)
+	}
 
 	if err := h.applyBucketConfig(ctx, bucketName, spec); err != nil {
 		return nil, fmt.Errorf("failed to apply bucket config: %w", err)
@@ -142,6 +159,22 @@ func (h *Handler) Validate(resource *providerv1.Resource) *providerv1.ValidateRe
 		})
 	}
 
+	// Validate spec
+	spec, err := ParseSpec(resource.GetSpec().AsMap())
+	if err != nil {
+		errs = append(errs, &providerv1.ValidationError{
+			Code:    "INVALID_SPEC",
+			Field:   "spec",
+			Message: fmt.Sprintf("failed to parse spec: %v", err),
+		})
+	} else if err := spec.Validate(); err != nil {
+		errs = append(errs, &providerv1.ValidationError{
+			Code:    "INVALID_SPEC",
+			Field:   "spec",
+			Message: err.Error(),
+		})
+	}
+
 	return &providerv1.ValidateResponse{
 		Valid:  len(errs) == 0,
 		Errors: errs,
@@ -169,41 +202,35 @@ func (h *Handler) getBucketState(ctx context.Context, bucketName string) (*struc
 	return result, nil
 }
 
-func (h *Handler) applyBucketConfig(ctx context.Context, bucketName string, spec map[string]any) error {
-	if versioning, ok := spec["versioning"].(map[string]any); ok {
-		if enabled, ok := versioning["enabled"].(bool); ok && enabled {
-			_, err := h.client.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
-				Bucket: aws.String(bucketName),
-				VersioningConfiguration: &types.VersioningConfiguration{
-					Status: types.BucketVersioningStatusEnabled,
-				},
-			})
-			if err != nil {
-				return fmt.Errorf("failed to enable versioning: %w", err)
-			}
+func (h *Handler) applyBucketConfig(ctx context.Context, bucketName string, spec *S3BucketSpec) error {
+	if spec.Versioning != nil && spec.Versioning.Enabled {
+		_, err := h.client.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
+			Bucket: aws.String(bucketName),
+			VersioningConfiguration: &types.VersioningConfiguration{
+				Status: types.BucketVersioningStatusEnabled,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to enable versioning: %w", err)
 		}
 	}
 
-	if tags, ok := spec["tags"].(map[string]any); ok {
-		var tagSet []types.Tag
+	if len(spec.Tags) > 0 {
+		tagSet := make([]types.Tag, 0, len(spec.Tags))
 
-		for k, v := range tags {
-			if strVal, ok := v.(string); ok {
-				tagSet = append(tagSet, types.Tag{
-					Key:   aws.String(k),
-					Value: aws.String(strVal),
-				})
-			}
+		for k, v := range spec.Tags {
+			tagSet = append(tagSet, types.Tag{
+				Key:   aws.String(k),
+				Value: aws.String(v),
+			})
 		}
 
-		if len(tagSet) > 0 {
-			_, err := h.client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
-				Bucket:  aws.String(bucketName),
-				Tagging: &types.Tagging{TagSet: tagSet},
-			})
-			if err != nil {
-				return fmt.Errorf("failed to set tags: %w", err)
-			}
+		_, err := h.client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+			Bucket:  aws.String(bucketName),
+			Tagging: &types.Tagging{TagSet: tagSet},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to set tags: %w", err)
 		}
 	}
 

@@ -30,11 +30,11 @@ type Provider struct {
 }
 
 // New creates a new AWS provider.
-func New(cfg *aws.Config, logger *slog.Logger) *Provider {
+func New(cfg *aws.Config, endpoint string, logger *slog.Logger) *Provider {
 	return &Provider{
 		cfg:       cfg,
 		logger:    logger.With("provider", providerName),
-		s3Handler: s3.NewHandler(cfg),
+		s3Handler: s3.NewHandler(cfg, endpoint),
 	}
 }
 

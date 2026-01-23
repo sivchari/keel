@@ -14,7 +14,7 @@ func TestProvider_GetInfo(t *testing.T) {
 	t.Parallel()
 
 	cfg := aws.Config{Region: "ap-northeast-1"}
-	p := provider.New(&cfg, newTestLogger())
+	p := provider.New(&cfg, "", newTestLogger())
 
 	resp, err := p.GetInfo(context.Background(), &providerv1.GetInfoRequest{})
 	if err != nil {
@@ -52,7 +52,7 @@ func TestProvider_Validate_Valid(t *testing.T) {
 	t.Parallel()
 
 	cfg := aws.Config{Region: "ap-northeast-1"}
-	p := provider.New(&cfg, newTestLogger())
+	p := provider.New(&cfg, "", newTestLogger())
 
 	resp, err := p.Validate(context.Background(), &providerv1.ValidateRequest{
 		Resource: &providerv1.Resource{
@@ -80,7 +80,7 @@ func TestProvider_Validate_EmptyName(t *testing.T) {
 	t.Parallel()
 
 	cfg := aws.Config{Region: "ap-northeast-1"}
-	p := provider.New(&cfg, newTestLogger())
+	p := provider.New(&cfg, "", newTestLogger())
 
 	resp, err := p.Validate(context.Background(), &providerv1.ValidateRequest{
 		Resource: &providerv1.Resource{
@@ -135,7 +135,7 @@ func TestProvider_Validate_InvalidLength(t *testing.T) {
 	}
 
 	cfg := aws.Config{Region: "ap-northeast-1"}
-	p := provider.New(&cfg, newTestLogger())
+	p := provider.New(&cfg, "", newTestLogger())
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestProvider_GetHandler_UnsupportedKind(t *testing.T) {
 	t.Parallel()
 
 	cfg := aws.Config{Region: "ap-northeast-1"}
-	p := provider.New(&cfg, newTestLogger())
+	p := provider.New(&cfg, "", newTestLogger())
 
 	_, err := p.Get(context.Background(), &providerv1.GetRequest{
 		Key: &providerv1.ResourceKey{
