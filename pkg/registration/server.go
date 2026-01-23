@@ -96,7 +96,7 @@ func (s *Server) Register(ctx context.Context, req *registrationv1.RegisterReque
 }
 
 // Deregister removes a provider from keel core.
-func (s *Server) Deregister(ctx context.Context, req *registrationv1.DeregisterRequest) (*registrationv1.DeregisterResponse, error) {
+func (s *Server) Deregister(_ context.Context, req *registrationv1.DeregisterRequest) (*registrationv1.DeregisterResponse, error) {
 	name := req.GetName()
 
 	s.logger.Info("provider deregistration request", "name", name)
@@ -117,7 +117,7 @@ func (s *Server) Deregister(ctx context.Context, req *registrationv1.DeregisterR
 }
 
 // Heartbeat keeps the registration alive.
-func (s *Server) Heartbeat(ctx context.Context, req *registrationv1.HeartbeatRequest) (*registrationv1.HeartbeatResponse, error) {
+func (s *Server) Heartbeat(_ context.Context, req *registrationv1.HeartbeatRequest) (*registrationv1.HeartbeatResponse, error) {
 	name := req.GetName()
 
 	if err := s.registry.Heartbeat(name); err != nil {

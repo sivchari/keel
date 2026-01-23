@@ -23,6 +23,15 @@ import (
 	"github.com/sivchari/keel/pkg/source/git"
 )
 
+type config struct {
+	repoPath         string
+	pollInterval     time.Duration
+	providers        string
+	registrationAddr string
+	workers          int
+	logLevel         string
+}
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal error", "error", err)
@@ -31,30 +40,15 @@ func main() {
 }
 
 func run() error {
-	var (
-		repoPath         = flag.String("repo", ".", "path to git repository")
-		pollInterval     = flag.Duration("poll-interval", 30*time.Second, "git polling interval")
-		providers        = flag.String("providers", "", "comma-separated list of provider addresses (format: apiGroup=address)")
-		registrationAddr = flag.String("registration-addr", ":50050", "address for provider registration gRPC server")
-		workers          = flag.Int("workers", 1, "number of concurrent reconciliation workers")
-		logLevel         = flag.String("log-level", "info", "log level (debug, info, warn, error)")
-	)
-
-	flag.Parse()
-
-	level := parseLogLevel(*logLevel)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: level,
-	}))
-
-	slog.SetDefault(logger)
+	cfg := parseFlags()
+	logger := setupLogger(cfg.logLevel)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	gitSource, err := git.New(git.Options{
-		Path:         *repoPath,
-		PollInterval: *pollInterval,
+		Path:         cfg.repoPath,
+		PollInterval: cfg.pollInterval,
 		Logger:       logger,
 	})
 	if err != nil {
@@ -62,64 +56,49 @@ func run() error {
 	}
 
 	registry := registration.NewRegistry(logger)
+
 	defer func() {
 		if err := registry.Close(); err != nil {
 			logger.Error("failed to close registry", "error", err)
 		}
 	}()
 
-	if *providers != "" {
-		if err := setupProviders(ctx, registry, *providers, logger); err != nil {
+	if cfg.providers != "" {
+		if err := setupProviders(ctx, registry, cfg.providers, logger); err != nil {
 			return fmt.Errorf("failed to setup providers: %w", err)
 		}
 	}
 
-	grpcServer := grpc.NewServer()
-	regServer := registration.NewServer(registry, registration.WithLogger(logger))
-	registrationv1.RegisterRegistrationServiceServer(grpcServer, regServer)
-
-	lis, err := net.Listen("tcp", *registrationAddr)
-	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", *registrationAddr, err)
+	if err := startRegistrationServer(ctx, registry, cfg.registrationAddr, logger); err != nil {
+		return fmt.Errorf("failed to start registration server: %w", err)
 	}
 
-	go func() {
-		logger.Info("starting registration server", "addr", *registrationAddr)
-		if err := grpcServer.Serve(lis); err != nil {
-			logger.Error("registration server error", "error", err)
-		}
-	}()
+	return startController(ctx, gitSource, registry, &cfg, logger)
+}
 
-	go func() {
-		<-ctx.Done()
-		grpcServer.GracefulStop()
-	}()
+func parseFlags() config {
+	var cfg config
 
-	rec := reconciler.New(reconciler.Options{
-		Store:    gitSource,
-		Registry: registry,
-		Logger:   logger,
-	})
+	flag.StringVar(&cfg.repoPath, "repo", ".", "path to git repository")
+	flag.DurationVar(&cfg.pollInterval, "poll-interval", 30*time.Second, "git polling interval")
+	flag.StringVar(&cfg.providers, "providers", "", "comma-separated list of provider addresses (format: apiGroup=address)")
+	flag.StringVar(&cfg.registrationAddr, "registration-addr", ":50050", "address for provider registration gRPC server")
+	flag.IntVar(&cfg.workers, "workers", 1, "number of concurrent reconciliation workers")
+	flag.StringVar(&cfg.logLevel, "log-level", "info", "log level (debug, info, warn, error)")
+	flag.Parse()
 
-	ctrl := controller.New("keel", rec, controller.Options{
-		MaxConcurrentReconciles: *workers,
-		Logger:                  logger,
-	})
+	return cfg
+}
 
-	ctrl.Watch(gitSource)
+func setupLogger(logLevel string) *slog.Logger {
+	level := parseLogLevel(logLevel)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: level,
+	}))
 
-	logger.Info("starting keel controller",
-		"repo", *repoPath,
-		"pollInterval", *pollInterval,
-		"workers", *workers,
-		"registrationAddr", *registrationAddr,
-	)
+	slog.SetDefault(logger)
 
-	if err := ctrl.Start(ctx); err != nil {
-		return fmt.Errorf("controller stopped with error: %w", err)
-	}
-
-	return nil
+	return logger
 }
 
 func parseLogLevel(level string) slog.Level {
@@ -135,6 +114,62 @@ func parseLogLevel(level string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+func startRegistrationServer(ctx context.Context, registry *registration.Registry, addr string, logger *slog.Logger) error {
+	grpcServer := grpc.NewServer()
+	regServer := registration.NewServer(registry, registration.WithLogger(logger))
+	registrationv1.RegisterRegistrationServiceServer(grpcServer, regServer)
+
+	var lc net.ListenConfig
+
+	lis, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
+	go func() {
+		logger.Info("starting registration server", "addr", addr)
+
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.Error("registration server error", "error", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		grpcServer.GracefulStop()
+	}()
+
+	return nil
+}
+
+func startController(ctx context.Context, gitSource *git.Source, registry *registration.Registry, cfg *config, logger *slog.Logger) error {
+	rec := reconciler.New(reconciler.Options{
+		Store:    gitSource,
+		Registry: registry,
+		Logger:   logger,
+	})
+
+	ctrl := controller.New("keel", rec, controller.Options{
+		MaxConcurrentReconciles: cfg.workers,
+		Logger:                  logger,
+	})
+
+	ctrl.Watch(gitSource)
+
+	logger.Info("starting keel controller",
+		"repo", cfg.repoPath,
+		"pollInterval", cfg.pollInterval,
+		"workers", cfg.workers,
+		"registrationAddr", cfg.registrationAddr,
+	)
+
+	if err := ctrl.Start(ctx); err != nil {
+		return fmt.Errorf("controller stopped with error: %w", err)
+	}
+
+	return nil
 }
 
 func setupProviders(ctx context.Context, registry *registration.Registry, providersFlag string, logger *slog.Logger) error {
@@ -158,6 +193,7 @@ func setupProviders(ctx context.Context, registry *registration.Registry, provid
 		}
 
 		apiGroups := []string{apiGroup}
+
 		for _, kind := range client.SupportedKinds() {
 			if kind.GetApiGroup() != apiGroup {
 				apiGroups = append(apiGroups, kind.GetApiGroup())
