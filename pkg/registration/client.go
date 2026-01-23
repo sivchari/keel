@@ -40,7 +40,7 @@ type ClientOptions struct {
 }
 
 // NewClient creates a new registration client.
-func NewClient(ctx context.Context, opts ClientOptions) (*Client, error) {
+func NewClient(_ context.Context, opts ClientOptions) (*Client, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
@@ -83,6 +83,7 @@ func (c *Client) Register(ctx context.Context, version string, kinds []*provider
 
 	if resp.GetHeartbeatIntervalSeconds() > 0 {
 		c.heartbeatInterval = time.Duration(resp.GetHeartbeatIntervalSeconds()) * time.Second
+
 		c.heartbeatStop = make(chan struct{})
 		go c.heartbeatLoop()
 	}
