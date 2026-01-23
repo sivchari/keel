@@ -99,24 +99,42 @@ func (c *Controller) Watch(source core.Source) *Controller {
 
 // Start runs the controller until the context is cancelled.
 func (c *Controller) Start(ctx context.Context) error {
-	c.mu.Lock()
-
-	if c.started {
-		c.mu.Unlock()
-
-		return errors.New("controller already started")
+	if err := c.markStarted(); err != nil {
+		return err
 	}
-
-	c.started = true
-	c.mu.Unlock()
 
 	c.logger.Info("starting controller", "workers", c.maxConcurrentReconciles)
 
-	// Start sources.
 	var wg sync.WaitGroup
 
 	errCh := make(chan error, len(c.sources))
 
+	c.startSources(ctx, &wg, errCh)
+	c.startWorkers(ctx, &wg)
+
+	<-ctx.Done()
+
+	c.logger.Info("shutting down controller")
+	c.queue.ShutDown()
+	wg.Wait()
+
+	return c.collectErrors(errCh)
+}
+
+func (c *Controller) markStarted() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.started {
+		return errors.New("controller already started")
+	}
+
+	c.started = true
+
+	return nil
+}
+
+func (c *Controller) startSources(ctx context.Context, wg *sync.WaitGroup, errCh chan<- error) {
 	for i, source := range c.sources {
 		wg.Add(1)
 
@@ -124,14 +142,14 @@ func (c *Controller) Start(ctx context.Context) error {
 			defer wg.Done()
 
 			handler := core.EnqueueEventHandler(c.queue)
-
 			if err := src.Start(ctx, handler, c.queue); err != nil {
 				errCh <- fmt.Errorf("source %d failed: %w", idx, err)
 			}
 		}(i, source)
 	}
+}
 
-	// Start workers.
+func (c *Controller) startWorkers(ctx context.Context, wg *sync.WaitGroup) {
 	for range c.maxConcurrentReconciles {
 		wg.Add(1)
 
@@ -141,21 +159,12 @@ func (c *Controller) Start(ctx context.Context) error {
 			c.runWorker(ctx)
 		}()
 	}
+}
 
-	// Wait for context cancellation.
-	<-ctx.Done()
-
-	c.logger.Info("shutting down controller")
-	c.queue.ShutDown()
-
-	// Wait for all goroutines to finish.
-	wg.Wait()
-
-	// Check for source errors.
+func (c *Controller) collectErrors(errCh chan error) error {
 	close(errCh)
 
 	var errs []error
-
 	for err := range errCh {
 		errs = append(errs, err)
 	}
@@ -213,28 +222,18 @@ func (c *Controller) reconcile(ctx context.Context, key core.ResourceKey) (core.
 
 	c.logger.Debug("reconciling", "key", key.String())
 
-	req := core.Request{Key: key}
-
-	result, err := c.reconciler.Reconcile(ctx, req)
-
+	result, err := c.reconciler.Reconcile(ctx, core.Request{Key: key})
 	duration := time.Since(start)
 
 	if err != nil {
-		c.logger.Error("reconciliation error",
-			"key", key.String(),
-			"duration", duration,
-			"error", err,
-		)
+		c.logger.Error("reconciliation error", "key", key.String(), "duration", duration, "error", err)
 
-		return core.Result{}, err
+		return core.Result{}, fmt.Errorf("reconcile %s: %w", key.String(), err)
 	}
 
 	c.logger.Debug("reconciliation complete",
-		"key", key.String(),
-		"duration", duration,
-		"requeue", result.Requeue,
-		"requeueAfter", result.RequeueAfter,
-	)
+		"key", key.String(), "duration", duration,
+		"requeue", result.Requeue, "requeueAfter", result.RequeueAfter)
 
 	return result, nil
 }
