@@ -175,6 +175,7 @@ func (q *Queue) ShutDown() {
 
 	// Cancel all delayed timers
 	q.delayedMu.Lock()
+
 	for _, timer := range q.delayed {
 		timer.Stop()
 	}

@@ -125,6 +125,7 @@ func TestExponentialBackoffRateLimiter_Concurrent(t *testing.T) {
 				limiter.When(key)
 				limiter.NumRequeues(key)
 			}
+
 			done <- struct{}{}
 		}()
 	}

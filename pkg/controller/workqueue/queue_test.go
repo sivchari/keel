@@ -204,7 +204,9 @@ func TestQueue_Concurrent(t *testing.T) {
 				if shutdown {
 					return
 				}
+
 				processed <- key
+
 				q.Done(key)
 			}
 		}()
