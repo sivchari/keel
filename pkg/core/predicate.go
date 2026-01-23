@@ -25,6 +25,7 @@ func (p PredicateFunc) Create(key ResourceKey) bool {
 	if p.CreateFunc != nil {
 		return p.CreateFunc(key)
 	}
+
 	return true
 }
 
@@ -33,6 +34,7 @@ func (p PredicateFunc) Update(key ResourceKey, oldGeneration, newGeneration int6
 	if p.UpdateFunc != nil {
 		return p.UpdateFunc(key, oldGeneration, newGeneration)
 	}
+
 	return true
 }
 
@@ -41,6 +43,7 @@ func (p PredicateFunc) Delete(key ResourceKey) bool {
 	if p.DeleteFunc != nil {
 		return p.DeleteFunc(key)
 	}
+
 	return true
 }
 
@@ -72,6 +75,7 @@ func And(predicates ...Predicate) Predicate {
 					return false
 				}
 			}
+
 			return true
 		},
 		UpdateFunc: func(key ResourceKey, oldGen, newGen int64) bool {
@@ -80,6 +84,7 @@ func And(predicates ...Predicate) Predicate {
 					return false
 				}
 			}
+
 			return true
 		},
 		DeleteFunc: func(key ResourceKey) bool {
@@ -88,6 +93,7 @@ func And(predicates ...Predicate) Predicate {
 					return false
 				}
 			}
+
 			return true
 		},
 	}
@@ -102,6 +108,7 @@ func Or(predicates ...Predicate) Predicate {
 					return true
 				}
 			}
+
 			return false
 		},
 		UpdateFunc: func(key ResourceKey, oldGen, newGen int64) bool {
@@ -110,6 +117,7 @@ func Or(predicates ...Predicate) Predicate {
 					return true
 				}
 			}
+
 			return false
 		},
 		DeleteFunc: func(key ResourceKey) bool {
@@ -118,6 +126,7 @@ func Or(predicates ...Predicate) Predicate {
 					return true
 				}
 			}
+
 			return false
 		},
 	}
