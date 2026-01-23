@@ -1,0 +1,39 @@
+services:
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - DEBUG=1
+
+  provider-aws:
+    build:
+      context: .
+      dockerfile: providers/aws/Dockerfile
+    ports:
+      - "50051:50051"
+    environment:
+      - AWS_REGION=ap-northeast-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    command:
+      - --addr=:50051
+      - --region=ap-northeast-1
+      - --endpoint=http://localstack:4566
+    depends_on:
+      - localstack
+
+  keel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./resources:/resources:ro
+    command:
+      - --repo=/resources
+      - --poll-interval=10s
+      - --providers=aws.keel.dev=provider-aws:50051
+      - --log-level=debug
+    depends_on:
+      - provider-aws
