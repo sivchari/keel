@@ -29,8 +29,9 @@ func main() {
 
 func run() error {
 	var (
-		addr   = flag.String("addr", ":50051", "server address")
-		region = flag.String("region", "", "AWS region (defaults to AWS_REGION env var)")
+		addr     = flag.String("addr", ":50051", "server address")
+		region   = flag.String("region", "", "AWS region (defaults to AWS_REGION env var)")
+		endpoint = flag.String("endpoint", "", "custom AWS endpoint URL (for LocalStack)")
 	)
 
 	flag.Parse()
@@ -55,7 +56,7 @@ func run() error {
 	}
 
 	server := grpc.NewServer()
-	providerService := provider.New(&cfg, logger)
+	providerService := provider.New(&cfg, *endpoint, logger)
 
 	providerv1.RegisterProviderServiceServer(server, providerService)
 	reflection.Register(server)
@@ -66,7 +67,7 @@ func run() error {
 		server.GracefulStop()
 	}()
 
-	logger.Info("starting AWS provider server", "addr", *addr, "region", cfg.Region)
+	logger.Info("starting AWS provider server", "addr", *addr, "region", cfg.Region, "endpoint", *endpoint)
 
 	if err := server.Serve(listener); err != nil {
 		return fmt.Errorf("server error: %w", err)

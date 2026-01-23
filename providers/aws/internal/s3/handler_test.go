@@ -12,7 +12,7 @@ import (
 func newTestHandler() *s3.Handler {
 	cfg := aws.Config{Region: "ap-northeast-1"}
 
-	return s3.NewHandler(&cfg)
+	return s3.NewHandler(&cfg, "")
 }
 
 func TestHandler_Validate_ValidBucket(t *testing.T) {
