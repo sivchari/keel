@@ -17,17 +17,27 @@ type ResourceStore interface {
 	Get(key core.ResourceKey) *core.Resource
 }
 
+// ProviderRegistry provides access to registered providers.
+type ProviderRegistry interface {
+	// GetByAPIGroup returns the provider client for the given API group.
+	GetByAPIGroup(apiGroup string) (*provider.Client, bool)
+}
+
 // Reconciler reconciles resources using providers.
 type Reconciler struct {
-	store     ResourceStore
-	providers map[string]*provider.Client
-	logger    *slog.Logger
+	store    ResourceStore
+	registry ProviderRegistry
+	logger   *slog.Logger
 }
 
 // Options configures a Reconciler.
 type Options struct {
 	// Store provides access to resource definitions.
 	Store ResourceStore
+
+	// Registry provides access to registered providers.
+	// If nil, providers must be added manually via AddProvider.
+	Registry ProviderRegistry
 
 	// Logger for reconciliation logs.
 	Logger *slog.Logger
@@ -40,15 +50,10 @@ func New(opts Options) *Reconciler {
 	}
 
 	return &Reconciler{
-		store:     opts.Store,
-		providers: make(map[string]*provider.Client),
-		logger:    opts.Logger.With("component", "reconciler"),
+		store:    opts.Store,
+		registry: opts.Registry,
+		logger:   opts.Logger.With("component", "reconciler"),
 	}
-}
-
-// AddProvider adds a provider client for the given API group.
-func (r *Reconciler) AddProvider(apiGroup string, client *provider.Client) {
-	r.providers[apiGroup] = client
 }
 
 // Reconcile implements core.Reconciler.
@@ -61,7 +66,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req core.Request) (core.Resu
 
 	apiGroup := extractAPIGroup(key.APIVersion)
 
-	client, ok := r.providers[apiGroup]
+	client, ok := r.registry.GetByAPIGroup(apiGroup)
 	if !ok {
 		r.logger.Warn("no provider for API group", "apiGroup", apiGroup)
 

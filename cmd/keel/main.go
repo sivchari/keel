@@ -6,15 +6,20 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
+	registrationv1 "github.com/sivchari/keel/gen/keel/registration/v1"
 	"github.com/sivchari/keel/pkg/controller"
 	"github.com/sivchari/keel/pkg/provider"
 	"github.com/sivchari/keel/pkg/reconciler"
+	"github.com/sivchari/keel/pkg/registration"
 	"github.com/sivchari/keel/pkg/source/git"
 )
 
@@ -27,11 +32,12 @@ func main() {
 
 func run() error {
 	var (
-		repoPath     = flag.String("repo", ".", "path to git repository")
-		pollInterval = flag.Duration("poll-interval", 30*time.Second, "git polling interval")
-		providers    = flag.String("providers", "", "comma-separated list of provider addresses (format: apiGroup=address)")
-		workers      = flag.Int("workers", 1, "number of concurrent reconciliation workers")
-		logLevel     = flag.String("log-level", "info", "log level (debug, info, warn, error)")
+		repoPath         = flag.String("repo", ".", "path to git repository")
+		pollInterval     = flag.Duration("poll-interval", 30*time.Second, "git polling interval")
+		providers        = flag.String("providers", "", "comma-separated list of provider addresses (format: apiGroup=address)")
+		registrationAddr = flag.String("registration-addr", ":50050", "address for provider registration gRPC server")
+		workers          = flag.Int("workers", 1, "number of concurrent reconciliation workers")
+		logLevel         = flag.String("log-level", "info", "log level (debug, info, warn, error)")
 	)
 
 	flag.Parse()
@@ -55,16 +61,45 @@ func run() error {
 		return fmt.Errorf("failed to create git source: %w", err)
 	}
 
-	rec := reconciler.New(reconciler.Options{
-		Store:  gitSource,
-		Logger: logger,
-	})
+	registry := registration.NewRegistry(logger)
+	defer func() {
+		if err := registry.Close(); err != nil {
+			logger.Error("failed to close registry", "error", err)
+		}
+	}()
 
 	if *providers != "" {
-		if err := setupProviders(ctx, rec, *providers, logger); err != nil {
+		if err := setupProviders(ctx, registry, *providers, logger); err != nil {
 			return fmt.Errorf("failed to setup providers: %w", err)
 		}
 	}
+
+	grpcServer := grpc.NewServer()
+	regServer := registration.NewServer(registry, registration.WithLogger(logger))
+	registrationv1.RegisterRegistrationServiceServer(grpcServer, regServer)
+
+	lis, err := net.Listen("tcp", *registrationAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", *registrationAddr, err)
+	}
+
+	go func() {
+		logger.Info("starting registration server", "addr", *registrationAddr)
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.Error("registration server error", "error", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		grpcServer.GracefulStop()
+	}()
+
+	rec := reconciler.New(reconciler.Options{
+		Store:    gitSource,
+		Registry: registry,
+		Logger:   logger,
+	})
 
 	ctrl := controller.New("keel", rec, controller.Options{
 		MaxConcurrentReconciles: *workers,
@@ -77,6 +112,7 @@ func run() error {
 		"repo", *repoPath,
 		"pollInterval", *pollInterval,
 		"workers", *workers,
+		"registrationAddr", *registrationAddr,
 	)
 
 	if err := ctrl.Start(ctx); err != nil {
@@ -101,7 +137,7 @@ func parseLogLevel(level string) slog.Level {
 	}
 }
 
-func setupProviders(ctx context.Context, rec *reconciler.Reconciler, providersFlag string, logger *slog.Logger) error {
+func setupProviders(ctx context.Context, registry *registration.Registry, providersFlag string, logger *slog.Logger) error {
 	for _, p := range strings.Split(providersFlag, ",") {
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -121,7 +157,17 @@ func setupProviders(ctx context.Context, rec *reconciler.Reconciler, providersFl
 			return fmt.Errorf("failed to connect to provider %s at %s: %w", apiGroup, addr, err)
 		}
 
-		rec.AddProvider(apiGroup, client)
+		apiGroups := []string{apiGroup}
+		for _, kind := range client.SupportedKinds() {
+			if kind.GetApiGroup() != apiGroup {
+				apiGroups = append(apiGroups, kind.GetApiGroup())
+			}
+		}
+
+		if err := registry.RegisterWithClient(client.Name(), addr, client.Version(), apiGroups, false, client); err != nil {
+			return fmt.Errorf("failed to register provider %s: %w", apiGroup, err)
+		}
+
 		logger.Info("connected to provider", "apiGroup", apiGroup, "name", client.Name(), "version", client.Version())
 	}
 
