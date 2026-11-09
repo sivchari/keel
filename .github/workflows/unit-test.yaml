@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
@@ -17,8 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
@@ -42,7 +40,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Total Coverage: $COVERAGE**" >> $GITHUB_STEP_SUMMARY
       - name: Comment coverage on PR
-        if: github.event_name == 'pull_request_target'
+        # Fork PRs get a read-only GITHUB_TOKEN; the summary above still has the number.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v8
         with:
           script: |
